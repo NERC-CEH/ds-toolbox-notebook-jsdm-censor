@@ -1,0 +1,448 @@
+---
+title: "Multivariate Modelling of Censored Chemicals using jsdmstan"
+author: "Fiona Seaton"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+
+Vignette set-up, including loading of libraries and reading of data for plotting:
+
+```{r message=FALSE,warning=FALSE}
+library(jsdmstan)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(patchwork)
+library(sf)
+gbr <- st_read("Data/gbr.shp")
+theme_set(theme_classic())
+set.seed(1113156)
+```
+
+
+ABSTRACT
+
+# Introduction
+
+Water quality data often occurs in subsets of closely-related chemicals, that can be expected to correlate in their strength. Notable examples include PFAS and PAHs, which are of ever-increasing policy and public relevance. Generally, statistical modelling of these chemicals is done one chemical at a time. However, it is possible that multivariate modelling techniques, which would allow information to be shared between different chemicals, could lead to more accurate predictions of chemical concentrations for both the individual chemicals and the entire family group. 
+
+Multivariate modelling of water quality chemicals is particularly relevant due to the presence of censoring, i.e. measurements fall above or below the limit of detection. While laboratory methods are ever-improving, there are still often chemical measurements that fall outside the measurement limits. And if we are to compare across longer periods of time we must account for changing limits of detection. In theory, multivariate modelling could allow the concentration of a more abundant chemical to inform the prediction of a chemical below the limit of detection. 
+
+In practice, most traditional multivariate modelling techniques are less able to cope with the censoring and complex structures present within water quality datasets. However, a potential option is the application of the joint species distribution modelling (JSDM) framework adopted recently in ecology (ref). This framework models multiple species simultaneously, taking account of their co-occurrence and response to environmental covariates, and allows for a wide variety of potential response families. The existing methods for JSDMs, however, do not allow for either left-censoring or lognormal distributions due to the focus on species-type data.
+
+Here we present the results of extending the JSDM approach within the `jsdmstan` package to include left-censoring and non-linear environmental effects. The `jsdmstan` package is an R package that allows the fitting of JSDMs within Stan, a probabilistic programming language for fitting Bayesian models using a variant of Hamiltonian Monte Carlo (refs). We provide here a brief introduction to the JSDM framework, plus explanation of the extension to left-censoring and non-linear effects, then illustrate these models using two case studies. This first case study is a model of PFAS chemicals and the second a model of PAH chemicals.
+
+# Methodology
+
+## Joint Species Distribution Modelling
+
+Joint Species Distribution Modelling (JSDM) is a technique that can be used to model multiple species simultaneously. Every JSDM models the species community matrix as a function of both the environmental covariates and the species-by-species relationship matrix. Where this differs from modelling data as multivariate normal is that the species-by-species relationships are represented within the linear predictor. This means that there are a much wider range of response families and model functions that can be accounted for within the JSDM framework.   
+
+We model the community data $m_{ij}$ for each site $i$ and taxon $j$ as a function of a species intercept, environmental covariates and species covariance matrix:
+
+$$ g(m_{ij}) = \beta_{0j} + \mathbf{x}_i^\intercal\beta_j + u_{ij} $$
+
+where $g(\cdot)$ is the link function, $\mathbf{x}_i^\intercal$ is the transpose of vector $\mathbf{x}$, and for each taxon $j$, $\beta_{0j}$ is an intercept and $beta_j$ is a vector of regression coefficients related to measured predictors.
+
+A site effect $\alpha_{i}$ can also be added to allow for effects that are consistent across sites. This can be modelled as a site-specific intercept, a site-specific random effect, or with the non-linear model extensions mentioned in the section below (NUMBER SECTION):
+
+$$ g(m_{ij}) = \alpha_{i} + \beta_{0j} + \mathbf{x}_i^\intercal\beta_j + u_{ij} $$
+
+### Multivariate Generalised Linear Mixed Models
+
+The entire matrix of covariance between species is modelled in MGLMMs. 
+
+$$ u_{ij} \sim \mathrm{N}(\mathbf{0},\mathbf{\Sigma}) $$
+
+Fitting the entire covariance matrix means that the amount of time required to fit these models scales with the number of species cubed, and the data required scales with the number of species squared. This makes these models both computationally and data intensive, particularly as the number of species increases.
+
+### Generalised Linear Latent Variable Models
+
+In response to some of the computational issues in fitting MGLMMs to many species, GLLVMs were developed in which $u_{ij}$ is now specified as a linear function of a set of latent variables $\mathbf{z_i}$:
+
+$$ y_{ij}|\mathbf{u}_i \sim \mathrm{F}(m_{ij},\phi_j) $$
+$$ u_{ij} = \mathbf{z}_i^\intercal \lambda_j $$
+
+The latent variables $\mathbf{z_i}$ are treated as random by assuming:
+
+$$y_{ij}|\mathbf{z_i} \sim \mathrm{F}(m_{ij},\phi_j)) $$
+$$\mathbf{z_i} \sim \mathrm{N}(\mathbf{0},\mathbf{1}) $$
+
+Treating the species covariance as pulling from a set of latent variables greatly reduces the computational time required to fit these models.
+
+### Normal and lognormal responses
+
+Within the link function for the normal and lognormal families the sigma parameter is modelled as a constant across all species, which is different from the case in other families with shape parameters (e.g. the negative binomial). This is necessary because of the high flexibility of the species-covariance matrix, which can within the Gaussian context lead to the model being unable to fit if there are also species-specific sigma parameters. This does not mean that the measured species variance is constrained to be identical, as the species variance within the species-covariance matrix propagates to the overall species variance. This can be shown using the data simulation functions within `jsdmstan`.  
+
+
+## Censored Response Modelling
+
+Censored data occurs when we know the limit of the measurement but not the true value. This is particularly common within water quality measurements, where the laboratory method may only be able to determine the true value within a certain range and for anything above or below that range returns a censored value. Left-censoring occurs when the true value is below the lower limit-of-detection, while right-censoring occurs when the true value is above the upper limit-of-detection. Within the jsdmstan package we can model left-censored data.
+
+Modelling left-censored data can be done by combining a standard probability density-based model for the uncensored measurements with a cumulative density-based model for the left-censored measurements. The model does not need to impute the values directly, but instead integrates them out as described in the [Stan's User Guide](https://mc-stan.org/docs/stan-users-guide/truncation-censoring.html#integrating-out-censored-values). Within the multivariate context in Stan code, this involves some fancy indexing, but in general follows the following pattern:
+
+```
+for (s in 1:S){
+  target += normal_lpdf(Y[uncensored] | mu[uncensored], sigma)
+  target += normal_lcdf(Y[censored] | mu[censored], sigma)
+}
+```
+
+Note that within jsdmstan left-censoring is currently only implemented for Gaussian/normal, lognormal, and gamma families. The gamma family is also still experimental and not fully tested yet, so in practice the lognormal or normal distributions should be used. 
+
+
+## Generalised Additive Modelling (i.e. splines)
+
+DAVE PLEASE HELP HERE
+
+Within jsdmstan, it is now possible to fit spline effects at the site/measurement level, which should cover all types of splines supported by `s()` within mgcv (although not all basis functions have been tested yet). It is also now possible to fit a factor-smooth that varies by species (or water quality chemical, in this case).
+
+# PFAS Case Study
+
+## Data Sources
+
+The PFAS dataset is sourced from (here), but we limited the analysis to a subset of sites that had multiple measurements over a time series to explore the ability of the splines to represent change over time. We ended up with 218 measurements over 14 sites taken between April 2023 and October 2025. The dataset contained 23 PFAS chemicals that had been uncensored at least once across all measurements, which we limited our analysis to. 
+
+```{r pfas-data-read}
+pfas <- readRDS("Data/pfas_subset.rds")
+```
+
+
+
+```{r pfas-expl-plot, fig.dim=c(7,6), fig.cap="The trends in PFAS chemicals over time"}
+ggplot(pfas, aes(x = DATE_TIME, y = MEAS_RESULT, 
+                 colour = MEAS_DETERMINAND_CODE)) +
+  geom_line() + scale_y_log10() +
+  facet_wrap(~wims_region + SAMP_SMPT_USER_REFERENCE) +
+  theme(legend.position = "none")
+```
+
+
+```{r pfas-data-prep}
+pfas_y <- pfas %>% ungroup() %>%
+  select(SAMP_ID, MEAS_RESULT, MEAS_DETERMINAND_CODE,
+         SAMP_SMPT_USER_REFERENCE, DATE_TIME) %>%
+  pivot_wider(values_from = MEAS_RESULT, names_from = MEAS_DETERMINAND_CODE)
+
+dim(na.omit(pfas_y))
+pfas_y <- na.omit(pfas_y)
+
+# create censoring matrix (1 if left-censored, 0 if not). Treating all
+# right-censored data as uncensored
+Y <- pfas_y[, 4:50]
+cens_ID <- pfas %>% ungroup() %>%
+  select(SAMP_ID, MEAS_SIGN, MEAS_DETERMINAND_CODE,SAMP_SMPT_USER_REFERENCE, DATE_TIME) %>%
+  mutate(MEAS_SIGN = replace_na(ifelse(MEAS_SIGN == "<", 1, 0),0)) %>%
+  pivot_wider(values_from = MEAS_SIGN, names_from = MEAS_DETERMINAND_CODE) %>%
+  filter(SAMP_ID %in% pfas_y$SAMP_ID)
+all.equal(cens_ID$SAMP_ID, pfas_y$SAMP_ID)
+all.equal(cens_ID$DATE_TIME, pfas_y$DATE_TIME)
+all.equal(cens_ID$SAMP_SMPT_USER_REFERENCE, pfas_y$SAMP_SMPT_USER_REFERENCE)
+all.equal(colnames(cens_ID),colnames(pfas_y))
+cens_ID <- cens_ID[,4:50]
+
+# remove chemicals that are mostly or wholly uncensored in subset for trial
+# model fits
+Y <- Y[, colSums(cens_ID)<72]
+cens_ID2 <- cens_ID[, colSums(cens_ID)<72]
+cens_ID2 <- as.matrix(cens_ID2)
+
+# add a column that gives time as number of days since 1st January 2024
+pfas_y$DATE_TIME2 <- (as.numeric(pfas_y$DATE_TIME) - 1704067201)/60/60/24
+pfas_y$samp_location <- as.factor(pfas_y$SAMP_SMPT_USER_REFERENCE)
+
+```
+
+
+## Model fit
+
+```{r, eval=FALSE}
+pfas_mod <- stan_jsdm(~s(DATE_TIME2, samp_location, bs = "fs"),
+                      data = pfas_y, Y = Y,
+                      prior = jsdm_prior(betas = "student_t(3,-6,1)",
+                                         sp = "normal(0,1)",
+                                         sigma = "normal(0.05,0.01)"),
+                      method = "mglmm", family = "lognormal",
+                      censoring = "left", cens_ID = cens_ID2, cores = 4,
+                      control = list(adapt_delta = 0.95), thin = 5)
+```
+
+```{r}
+pfas_mod <- readRDS("Data/pfas_mod_v2.rds")
+```
+
+
+First, let's check the model performance statistics:
+
+```{r}
+pfas_mod
+```
+
+
+A couple of problematic parameters are highlighted, which isn't great but the ESS is okay for our purposes - note also that the unthinned model fit fine, but we can't include that here due to file size limits.
+
+```{rfig.dim=c(7,3), fig.cap="The distribution of Rhat values (a) and ESS values (b) for the PFAS model"}
+p1 <- mcmc_plot(pfas_mod, plotfun = "rhat_hist")
+p2 <- mcmc_plot(pfas_mod, plotfun = "neff_hist")
+p1 + p2 + plot_annotation(tag_levels = "a")
+```
+
+While there are a few more parameters with low Neff/N ratios, the total sample size is still high enough that we should be okay for the analyses we are doing. 
+
+Model performance in terms of fit to the data can be assessed graphically using posterior predictive checks, i.e. we predict data with the model and then compare to the original data used to fit the model. We can do this on a chemical by chemical basis using `multi_pp_check`, or by comparing summary statistics using `pp_check`. 
+
+```{r, fig.cap="Ability of the PFAS model to recover the raw data values per chemical. Actual data shown in dark blue line, draws from the model shown as light blue lines."}
+multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 1:4)
+multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 5:8)
+multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 9:12)
+multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 13:16)
+multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 17:20)
+```
+
+This fits the data pretty well, the lags due to censoring are noticeable in all several in the chemical but as the model predictions are assuming no lags, that works out fine.
+
+If we're interested in overall summaries, such as the total PFAS value predicted, we can use the pp_check function. The default is to calculate sums over the rows of the model predictions, equivalent to calculating the predicted total PFAS chemical concentrations per row. This can be changed to calculate any summary statistic over either the rows or columns of the data. Note that this will not match the raw data, as the raw data contains within it the censoring and the predictions are assuming no censoring:
+
+```{r, fig.cap = "Model- and data- estimated distribution of total PFAS concentration. Actual data shown in dark blue line, draws from the model shown as light blue lines."}
+pp_check(pfas_mod)
+```
+
+If you want the predicted value of total PFAS concentration, you can access that using `jsdm_statsummary` which runs `posterior_predict` in the background to come up with the prediction by chemical and then sum them together. By default this runs using all draws, and returns a matrix where every row is a draw from the model and every column is a measurement point. The default is also to return on the scale of the linear predictor, which is the log-scale for a lognormal so this needs to be changed to return values on the prediction scale. This function could be used to give interval estimates for total chemical concentration.
+
+```{r}
+totalchem <- jsdm_statsummary(pfas_mod, post_type = "predict")
+summary(totalchem[,1:4])
+```
+
+
+We can also look at the predicted effects of each predictor. The fixed effects (in this case only the intercepts) can be explored using the `envplot` function:
+
+```{r, fig.cap="Model-estimated intercepts of the PFAS chemicals."}
+envplot(pfas_mod, include_intercept = TRUE)
+```
+
+As expected, these are very low due to the low concentrations of PFAS chemicals usually present. If the numeric values are of interest, then the `summary` function can be used to get the actual values:
+
+```{r}
+summary(pfas_mod, pars = "betas")
+```
+
+
+The spline effects can be explored using the `smoothplot` function. As smoothplot returns a list of plots (one for each spline in the model), we wrap them up into a patchwork object:
+
+```{r, fig.dim=c(7,7), fig.cap="Plot of the estimated smooth effects of time per sampling location within the PFAS model, given as 50 random draws from the model."}
+smoothplot(pfas_mod, ndraws = 50)[[1]]
+```
+
+The correlation between chemicals can be plotted using the `corrplot` function:
+
+```{r, fig.cap="Plot of the model-estimated correlation between each chemical and the other chemicals. For graphical simplicity, we only plot subplots for three of the chemicals (chosen at random)."}
+corrplot(pfas_mod, species = c("8891","2995","2960"))
+```
+
+
+# PAH case study
+
+## Data Sources
+
+For the PAH case study, we have extracted measurements from the (database?) that were taken on the Severn estuary between January 2015 to April 2017. This resulted in 196 measurements across 9 sites. Four PAH chemicals were measured during this period at all sites, with varying degrees of censoring. In total 339 measurements were left-censored, more often within the earlier part of the time series. There were a number of right-censored measurements as well (110), however unfortunately jsdmstan cannot currently deal with this and so we treat right-censored measurements as uncensored. 
+
+Here we read in the subset of the data as described above:
+
+```{r pah-data-read}
+pah_data <- readRDS("Data/pah_data.rds")
+```
+
+We then reformat the data into a wide format where each chemical appears as its own column and each row represents a measurement point in time and space. We do this twice, once with the actual numbers of the measurements and once with a representation of whether the measurement was left censored. We also double check that we end up with the same rows across both.
+
+```{r pah-data-manipulation}
+pah_df <- pah_data %>% 
+  select(-MEAS_SIGN) %>%
+  pivot_wider(names_from = MEAS_DETERMINAND_CODE, values_from = MEAS_RESULT,
+              names_prefix = "PAH")
+pah_df <- na.omit(pah_df)
+
+cens_ID_pah <- pah_data %>%
+  select(-MEAS_RESULT) %>%
+  mutate(MEAS_SIGN = replace_na(ifelse(MEAS_SIGN == "<", 1, 0),0)) %>%
+  pivot_wider(names_from = MEAS_DETERMINAND_CODE, values_from = MEAS_SIGN,
+              names_prefix = "PAH")%>%
+  filter(SAMP_ID %in% pah_df$SAMP_ID)
+
+all.equal(cens_ID_pah$SAMP_ID, pah_df$SAMP_ID)
+all.equal(cens_ID_pah$DATE_TIME, pah_df$DATE_TIME)
+```
+
+We take a quick look at the data using some exploratory plots, including site location and number of censored measurements over time.
+
+```{r pah-expl-plot, fig.dim = c(7,3), fig.cap="Locations of sampling points (a) and number of censored measurements over time per location (b)."}
+# explore via plots - adding a GBR outline so I can see where they are
+pas_sf <- pah_df %>%
+  count(SMPT_EASTING, SMPT_NORTHING, SMPT) %>%
+  st_as_sf(coords = c("SMPT_EASTING","SMPT_NORTHING"),
+           crs = 27700)
+p1 <- ggplot() +
+  geom_sf(data = gbr) +
+  geom_sf(data = pas_sf, mapping = aes(colour = n))+
+  coord_sf(xlim=c(-3.5,-2),ylim=c(51.2,52)) 
+
+p2 <- cens_ID_pah %>%
+  mutate(ncens = as.factor(PAH0714+PAH0731+PAH0733+PAH6399),
+         SMPT_NORTHING = SMPT_NORTHING/1000) %>%
+  ggplot(aes(x = DATE_TIME, y = SMPT_NORTHING, colour = ncens)) +
+  geom_point() +
+  labs(x = "Date", y = "Northing (000s)") 
+p1+p2 + plot_annotation(tag_levels = "a")
+```
+
+Get into jsdmstan format:
+
+```{r}
+# get into jsdmstan format
+pahs_Y <- select(pah_df, starts_with("PAH"))
+
+cens_ID_pah <- as.matrix(select(cens_ID_pah, starts_with("PAH")))
+all.equal(colnames(cens_ID_pah),colnames(pahs_Y))
+
+pah_df$SMPT <- as.factor(pah_df$SMPT)
+pah_df$yday <- yday(pah_df$DATE_TIME)
+
+```
+
+
+## Model
+
+We specify a PAH model where every non-linear effect is shared across the different chemicals. There are three non-linear effects, the first being a spline over the location (represented by northing only), the second being a cyclic spline over day of year to capture seasonal effects, and the third being a random effect on sampling point. The first spline we fit as a factor-smooth, with the spline varying by chemical. To do this within jsdmstan we add `species` to the spline call and set `bs = "fs"`. This will sort everything under the hood, so we don't need to worry about including a variable in the model call that is not within the data.frame supplied.
+
+```{r pah-model-dontrun, echo = TRUE, eval=FALSE}
+pah_mod_bychem <- stan_jsdm(~s(SMPT_NORTHING,species,bs="fs", k = 4) +
+                              s(yday, bs = "cc") +
+                              s(SMPT, bs = "re") ,
+                            data = pah_df, Y = pahs_Y,
+                            method = "mglmm", family = "lognormal",
+                            prior = jsdm_prior(sigma = "normal(0.1,0.01)",
+                                               sp = "normal(0,1)",
+                                               betas = "student_t(3,-5,1)"),
+                            censoring = "left", cens_ID = cens_ID_pah,
+                            cores = 4, thin = 5)
+```
+
+You'll notice the prior on the sigma parameter is extremely tight. Due to the high degree of flexibility in the normal and lognormal families within the jsdm context, the sigma parameter sometimes proves problematic in model fitting. As such, the prior on the sigma is set based upon an earlier model fit with a weakly informative prior (normal(0,1)) where >90% of the model fit had the sigma within the range of 0.08-0.12. In the earlier model, sigma occasionally went lower than this range for brief periods leading to convergence and sampler efficiency warnings. For the sake of this vignette, we are removing these cases where sigma drops and more variance is therefore explained by the species covariance parameters.
+
+The other priors are equivalent to saying the intercept is around 0.01 (the beta parameters are specified on the log-scale) and constraining the smoothing parameters to be relatively low.
+
+The model takes about 10-20 minutes to run on a windows laptop over four cores, so we are loading in the result separately:
+
+```{r pah-model-load}
+pah_mod_bychem <- readRDS("Data/pah_mod_bychem.rds")
+```
+
+Evaluating model fit can be done by looking at fit statistics and graphical checks. If we print the model object to the (), we get a summary of the model plus it would include any parameters with high Rhat values or low effective sample size values. 
+
+```{r}
+pah_mod_bychem
+```
+
+No problematic parameters are highlighted, which is a good start!
+
+While the Rhat values and ESS values of every parameter can be accessed using the summary command, the high number of parameters in these models means a quicker way to check would be through calling the bayesplot package with mcmc_plot. 
+
+```{r,fig.dim=c(7,3), fig.cap="The distribution of Rhat values (a) and ESS values (b) for the PAH model."}
+p1 <- mcmc_plot(pah_mod_bychem, plotfun = "rhat_hist")
+p2 <- mcmc_plot(pah_mod_bychem, plotfun = "neff_hist")
+p1 + p2 + plot_annotation(tag_levels = "a")
+```
+
+While there are a few parameters with low Neff/N ratios, the total sample size is still high enough that we should be okay. There are many other potential plotting functions for looking at model fit, see bayesplot::available_mcmc() for a full list.
+
+We can also check to see how well the data is recovered, using a posterior predictive check. Due to the censored nature of this data, we use an empirical cumulative density function overlay:
+
+```{r, fig.cap="Ability of the PAH model to recover the raw data values per chemical. Actual data shown in dark blue line, draws from the model shown as light blue lines."}
+multi_pp_check(pah_mod_bychem, plotfun = "ecdf_overlay", xlim=  c(0,1))
+```
+
+
+The data recovery of the model isn't great, with the model often overestimating the chemical concentrations present. This is due to the factor-smooth on species, unfortunately, so we are better off fitting a reduced model assuming the same responses across the chemical concentrations:
+
+```{r, eval = FALSE}
+pah_mod <- stan_jsdm(~s(SMPT_NORTHING, k = 4) +
+                       s(yday, bs = "cc") +
+                       s(SMPT, bs = "re") ,
+                     data = pah_df, Y = pahs_Y,
+                     method = "mglmm", family = "lognormal",
+                     prior = jsdm_prior(sigma = "normal(0.1,0.01)",
+                                        sp = "normal(0,1)",
+                                        betas = "student_t(3,-5,1)"),
+                     censoring = "left", cens_ID = cens_ID_pah,
+                     cores = 4, thin = 5)
+
+```
+
+```{r}
+pah_mod <- readRDS("Data/pah_mod.rds")
+```
+
+Okay, so let's see how this model performs.
+
+First, the model fit statistics:
+
+```{r}
+pah_mod
+```
+
+No problematic parameters are highlighted, which is a good start!
+
+```{rfig.dim=c(7,3), fig.cap="The distribution of Rhat values (a) and ESS values (b) for the second PAH model"}
+p1 <- mcmc_plot(pah_mod, plotfun = "rhat_hist")
+p2 <- mcmc_plot(pah_mod, plotfun = "neff_hist")
+p1 + p2 + plot_annotation(tag_levels = "a")
+```
+
+While there are a few more parameters with low Neff/N ratios, the total sample size is still high enough that we should be okay for the analyses we are doing. 
+
+Let's see if this model has recovered the data better:
+
+```{r, fig.cap="Ability of the second PAH model to recover the raw data values per chemical. Actual data shown in dark blue line, draws from the model shown as light blue lines."}
+multi_pp_check(pah_mod, plotfun = "ecdf_overlay")
+```
+
+This is a much better fit to the data! If we're interested in overall summaries, such as the total PAH value predicted, we can use the pp_check function. Note that this will not match the raw data, as the raw data contains within it the censoring and the predictions are assuming no censoring:
+
+```{r, fig.cap = "Model- and data- estimated distribution of total PAH concentration. Actual data shown in dark blue line, draws from the model shown as light blue lines."}
+pp_check(pah_mod)
+```
+
+
+
+We can also look at the predicted effects of each predictor. The fixed effects (in this case only the intercepts) can be explored using the `envplot` function:
+
+```{r, fig.cap="Model-estimated intercepts of the PAH chemicals."}
+envplot(pah_mod, include_intercept = TRUE)
+```
+
+
+The spline effects can be explored using the `smoothplot` function. As smoothplot returns a list of plots (one for each spline in the model), we wrap them up into a patchwork object:
+
+```{r, fig.dim=c(7,7), fig.cap="Plots of the estimated smooth effects within the PAH model, given as 50 random draws from the model. The predicted change as we go north (a), the predicted change over the year (b), and deviation from the average per site (i.e. the random effects, c)."}
+design <- "AB
+           CC"
+wrap_plots(smoothplot(pah_mod, ndraws = 50), design = design) + 
+  plot_annotation(tag_levels = "a")
+```
+
+The correlation between chemicals can be plotted using the `corrplot` function:
+
+```{r, fig.cap="Plot of the model-estimated correlation between each chemical and the other three chemicals. Note that there is repetition within this plot, i.e. PAH0714-PAH6399 appears within both the PAH0714 and PAH6399 subplots."}
+corrplot(pah_mod)
+```
+
+
+# Discussion
+
+
