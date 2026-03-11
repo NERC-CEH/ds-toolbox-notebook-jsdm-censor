@@ -268,10 +268,10 @@ While there are a few more parameters with low Neff/N ratios, the total sample s
 Model performance in terms of fit to the data can be assessed graphically using posterior predictive checks, i.e. we predict data with the model and then compare to the original data used to fit the model. We can do this on a chemical by chemical basis using `multi_pp_check`, or by comparing summary statistics using `pp_check`. 
 
 ```{r}
-multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 1:4)
-multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 5:8)
-multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 9:12)
-multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 13:16)
+multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 1:4, discrete = TRUE)
+multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 5:8, discrete = TRUE)
+multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 9:12, discrete = TRUE)
+multi_pp_check(pfas_mod, plotfun = "ecdf_overlay", species = 13:16, discrete = TRUE)
 ```
 
 This fits the data pretty well, the lags due to censoring are noticeable in all several in the chemical but as the model predictions are assuming no lags, that works out fine.
@@ -279,7 +279,7 @@ This fits the data pretty well, the lags due to censoring are noticeable in all 
 If we're interested in overall summaries, such as the total PFAS value predicted, we can use the pp_check function. The default is to calculate sums over the rows of the model predictions, equivalent to calculating the predicted total PFAS chemical concentrations per row. This can be changed to calculate any summary statistic over either the rows or columns of the data. Note that this will not match the raw data, as the raw data contains within it the censoring and the predictions are assuming no censoring:
 
 ```{r, fig.cap = "Model- and data- estimated distribution of total PFAS concentration. Actual data shown in dark blue line, draws from the model shown as light blue lines."}
-pp_check(pfas_mod)
+pp_check(pfas_mod, discrete = TRUE)
 ```
 
 If you want the predicted value of total PFAS concentration, you can access that using `jsdm_statsummary` which runs `posterior_predict` in the background to come up with the prediction by chemical and then sum them together. By default this runs using all draws, and returns a matrix where every row is a draw from the model and every column is a measurement point. The default is also to return on the scale of the linear predictor, which is the log-scale for a lognormal so this needs to be changed to return values on the prediction scale. This function could be used to give interval estimates for total chemical concentration.
@@ -478,7 +478,7 @@ While there are a few more parameters with low Neff/N ratios, the total sample s
 Let's see if this model has recovered the data better:
 
 ```{r, fig.cap="Ability of the second PAH model to recover the raw data values per chemical. Actual data shown in dark blue line, draws from the model shown as light blue lines."}
-multi_pp_check(pah_mod, plotfun = "ecdf_overlay")
+multi_pp_check(pah_mod, plotfun = "ecdf_overlay", discrete = TRUE)
 ```
 
 This is a much better fit to the data! If we're interested in overall summaries, such as the total PAH value predicted, we can use the pp_check function. Note that this will not match the raw data, as the raw data contains within it the censoring and the predictions are assuming no censoring:
