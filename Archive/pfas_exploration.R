@@ -39,10 +39,10 @@ ggplot(pfas_subset, aes(x = DATE_TIME, y = MEAS_RESULT, colour = MEAS_DETERMINAN
   facet_wrap(~wims_region + SAMP_SMPT_USER_REFERENCE) +
   theme(legend.position = "none")
 
-pfas_subset <- filter(pfas_filtered, DATE_TIME > dmy("01012023")) %>%
-  group_by(SAMP_SMPT_USER_REFERENCE) %>%
-  filter(sum(is.na(MEAS_SIGN))>50) %>% 
-  ungroup
+# pfas_subset <- filter(pfas_filtered, DATE_TIME > dmy("01012023")) %>%
+#   group_by(SAMP_SMPT_USER_REFERENCE) %>%
+#   filter(sum(is.na(MEAS_SIGN))>50) %>% 
+#   ungroup
 
 # get into jsdmstan format
 pfas_y <- pfas_subset %>% ungroup() %>%
@@ -54,7 +54,7 @@ pfas_y <- na.omit(pfas_y)
 
 # create censoring matrix (1 if left-censored, 0 if not). Treating all
 # right-censored data as uncensored
-Y <- pfas_y[, 6:52]
+Y <- pfas_y[, 6:ncol(pfas_y)]
 cens_ID <- pfas_subset %>% ungroup() %>%
   select(SAMP_ID, MEAS_SIGN, MEAS_DETERMINAND_CODE,SAMP_SMPT_USER_REFERENCE, DATE_TIME, SAMP_PURPOSE_CODE, wims_region) %>%
   mutate(MEAS_SIGN = replace_na(ifelse(MEAS_SIGN == "<", 1, 0),0)) %>%
@@ -64,18 +64,19 @@ all.equal(cens_ID$SAMP_ID, pfas_y$SAMP_ID)
 all.equal(cens_ID$DATE_TIME, pfas_y$DATE_TIME)
 all.equal(cens_ID$SAMP_SMPT_USER_REFERENCE, pfas_y$SAMP_SMPT_USER_REFERENCE)
 all.equal(colnames(cens_ID),colnames(pfas_y))
-cens_ID <- cens_ID[,6:52]
+cens_ID <- cens_ID[,6:ncol(cens_ID)]
 
 # remove chemicals that are mostly or wholly uncensored in subset for trial
 # model fits
-Y <- Y[, colSums(cens_ID)<423]
-cens_ID2 <- cens_ID[, colSums(cens_ID)<423]
+Y <- Y[, colSums(cens_ID)<(0.9*nrow(cens_ID))]
+cens_ID2 <- cens_ID[, colSums(cens_ID)<(0.9*nrow(cens_ID))]
 cens_ID2 <- as.matrix(cens_ID2)
 
 # add a column that gives time as number of days since 1st January 2024
-# pfas_y$DATE_TIME2 <- (as.numeric(pfas_y$DATE_TIME) - 1704067201)/60/60/24
+pfas_y$DATE_TIME2 <- (as.numeric(pfas_y$DATE_TIME) - 1704067201)/60/60/24
 pfas_y$samp_location <- as.factor(pfas_y$SAMP_SMPT_USER_REFERENCE)
 pfas_y$wims_region <- as.factor(pfas_y$wims_region)
+
 
 # model fit
 pfas_mod2 <- stan_jsdm(~ wims_region +  
@@ -173,6 +174,70 @@ p1+p2 + plot_annotation(tag_levels = "a") &
   scale_x_discrete(labels =c("an","mi","nw","so","sw","th"))
 ggsave("Sum PFAS comparison by Region two panel.png", path = "Archive/",
        width = 15, height = 8, units = "cm", scale = 1.4, dpi = 600)
+
+
+
+# Limit to 2024 and not by number of measurements in site ####
+pfas_subset <- filter(pfas_filtered, 
+                      DATE_TIME > dmy("01012024") & DATE_TIME < dmy("31122024")) %>%
+  group_by(SAMP_SMPT_USER_REFERENCE) %>%
+  filter(MEAS_DETERMINAND_CODE %in% colnames(Y)) %>%
+  filter(sum(is.na(MEAS_SIGN))>25) %>%
+  ungroup()
+ggplot(pfas_subset, aes(x = DATE_TIME, y = MEAS_RESULT, colour = MEAS_DETERMINAND_CODE)) +
+  geom_line() + scale_y_log10() +
+  facet_wrap(~wims_region + SAMP_SMPT_USER_REFERENCE) +
+  theme(legend.position = "none")
+
+# pfas_subset <- filter(pfas_filtered, DATE_TIME > dmy("01012023")) %>%
+#   group_by(SAMP_SMPT_USER_REFERENCE) %>%
+#   filter(sum(is.na(MEAS_SIGN))>50) %>% 
+#   ungroup
+
+# get into jsdmstan format
+pfas_y <- pfas_subset %>% ungroup() %>%
+  select(SAMP_ID, MEAS_RESULT, MEAS_DETERMINAND_CODE,SAMP_SMPT_USER_REFERENCE, DATE_TIME, SAMP_PURPOSE_CODE, wims_region) %>%
+  pivot_wider(values_from = MEAS_RESULT, names_from = MEAS_DETERMINAND_CODE)
+
+dim(na.omit(pfas_y))
+pfas_y <- na.omit(pfas_y)
+
+# create censoring matrix (1 if left-censored, 0 if not). Treating all
+# right-censored data as uncensored
+Y <- pfas_y[, 6:ncol(pfas_y)]
+cens_ID <- pfas_subset %>% ungroup() %>%
+  select(SAMP_ID, MEAS_SIGN, MEAS_DETERMINAND_CODE,SAMP_SMPT_USER_REFERENCE, DATE_TIME, SAMP_PURPOSE_CODE, wims_region) %>%
+  mutate(MEAS_SIGN = replace_na(ifelse(MEAS_SIGN == "<", 1, 0),0)) %>%
+  pivot_wider(values_from = MEAS_SIGN, names_from = MEAS_DETERMINAND_CODE) %>%
+  filter(SAMP_ID %in% pfas_y$SAMP_ID)
+all.equal(cens_ID$SAMP_ID, pfas_y$SAMP_ID)
+all.equal(cens_ID$DATE_TIME, pfas_y$DATE_TIME)
+all.equal(cens_ID$SAMP_SMPT_USER_REFERENCE, pfas_y$SAMP_SMPT_USER_REFERENCE)
+all.equal(colnames(cens_ID),colnames(pfas_y))
+cens_ID <- cens_ID[,6:ncol(cens_ID)]
+
+# remove chemicals that are mostly or wholly uncensored in subset for trial
+# model fits
+Y <- Y[, colSums(cens_ID)<(0.9*nrow(cens_ID))]
+cens_ID2 <- cens_ID[, colSums(cens_ID)<(0.9*nrow(cens_ID))]
+cens_ID2 <- as.matrix(cens_ID2)
+
+# add a column that gives time as number of days since 1st January 2024
+pfas_y$DATE_TIME2 <- (as.numeric(pfas_y$DATE_TIME) - 1704067201)/60/60/24
+pfas_y$samp_location <- as.factor(pfas_y$SAMP_SMPT_USER_REFERENCE)
+
+
+
+pfas_mod2 <- stan_jsdm(~ s(DATE_TIME2) +  
+                         s(samp_location, bs = "re"),
+                       data = pfas_y, Y = Y,
+                       prior = jsdm_prior(betas = "student_t(3,-7,2)",
+                                          sigma = "cauchy(0,0.5)"),
+                       method = "mglmm", family = "lognormal",
+                       censoring = "left", cens_ID = cens_ID2, cores = 4)
+
+# Other attempts ####
+
 
 filter(pfas_subset, MEAS_DETERMINAND_CODE %in% colnames(Y)) %>% 
   select(MEAS_DETERMINAND_CODE, DETE_SHORT_DESC, UNIT_SHORT_DESC) %>% distinct()
