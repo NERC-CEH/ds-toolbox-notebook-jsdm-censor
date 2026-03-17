@@ -4,6 +4,9 @@ authors:
   - family-names: Seaton
     given-names: Fiona
     orcid: https://orcid.org/0000-0002-2022-7451
+  - family-names: Miller
+    given-names: Dave L
+    orcid: https://orcid.org/0000-0002-9640-6755
 title: "Multivariate Modelling of Censored Chemicals using jsdmstan"
 version: 1.0.0
 identifiers:
