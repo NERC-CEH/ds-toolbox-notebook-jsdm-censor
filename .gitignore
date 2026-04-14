@@ -4,3 +4,6 @@
 .Ruserdata
 *.Rproj
 *.png
+renv/library/
+renv/staging/
+censor-jsdmstan-vignette_files/
