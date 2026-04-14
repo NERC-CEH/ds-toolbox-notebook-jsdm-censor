@@ -50,7 +50,7 @@ We model the community data $m_{ij}$ for each site $i$ and taxon $j$ as a functi
 
 $$ g(m_{ij}) = \beta_{0j} + \mathbf{x}_i^\intercal\beta_j + u_{ij} $$
 
-where $g(\cdot)$ is the link function, $\mathbf{x}_i^\intercal$ is the transpose of vector $\mathbf{x}$, and for each taxon $j$, $\beta_{0j}$ is an intercept and $beta_j$ is a vector of regression coefficients related to measured predictors.
+where $g(\cdot)$ is the link function, $\mathbf{x}_i^\intercal$ is the transpose of vector $\mathbf{x}$, and for each taxon $j$, $\beta_{0j}$ is an intercept and $\beta_{j}$ is a vector of regression coefficients related to measured predictors.
 
 A site effect $\alpha_{i}$ can also be added to allow for effects that are consistent across sites. This can be modelled as a site-specific intercept, a site-specific random effect, or with the non-linear model extensions mentioned in the flexible effects section below:
 
@@ -73,7 +73,7 @@ $$ u_{ij} = \mathbf{z}_i^\intercal \lambda_j $$
 
 The latent variables $\mathbf{z_i}$ are treated as random by assuming:
 
-$$y_{ij}|\mathbf{z_i} \sim \mathrm{F}(m_{ij},\phi_j)) $$
+$$y_{ij}|\mathbf{z_i} \sim \mathrm{F}(m_{ij},\phi_j) $$
 $$\mathbf{z_i} \sim \mathrm{N}(\mathbf{0},\mathbf{1}) $$
 
 Treating the species covariance as pulling from a set of latent variables greatly reduces the computational time required to fit these models.
@@ -107,7 +107,7 @@ Splines and random effects can be included to allow functions of the covariates 
 
 Within `jsdmstan`, it is now possible to fit spline effects at the site/measurement level. This is facilitated by a link to the [`mgcv`](https://cran.r-project.org/package=mgcv) package's function for setting-up such models. `jsdmstan` now supports all types of splines supported by `s()` (see [this manual page for more information](https://cran.r-project.org/web/packages/mgcv/refman/mgcv.html#smooth.terms) and see also [the random effects in `mgcv` help page](https://cran.r-project.org/web/packages/mgcv/refman/mgcv.html#random.effects). (Not all basis functions have been tested yet.) It is also now possible to fit a factor-smooth that varies by species (or water quality chemical, in this case; see [Pedersen et al 2019](http://doi.org/10.7717/peerj.6876) for more information on this formulation).
 
-To fit this models as part of `jsdmstan` we utilize the connections between smoothers and Bayesian methods (see [Miller (2025)](https://doi.org/10.1111/2041-210X.14498) and references therein). We can write our flexible functions as a sum of basis functions:
+To fit this model as part of `jsdmstan` we utilize the connections between smoothers and Bayesian methods (see [Miller (2025)](https://doi.org/10.1111/2041-210X.14498) and references therein). We can write our flexible functions as a sum of basis functions:
 
 \begin{equation*}
 s(x) = \sum_{k=1}^K \beta_k b_k(x)
@@ -549,7 +549,7 @@ corrplot(pah_mod)
 
 Within this work we have demonstrated the potential for joint species distribution models to model multivariate censored water quality chemical datasets. These can lead to further insight into water quality dynamics and improve the total predictions of groups of censored water quality chemical concentrations.
 
-The ability of a JSDM  approach to improve the predictions of species depends upon the common species being a good predictor for the rarer species ([Erickson & Smith, 2023](https://doi.org/10.1111/ecog.06500)). Within our two case studies we found very different levels of residual correlation between chemicals, with PFAS chemicals showing weak to moderate correlation with each other while PAH chemicals show strong to very strong correlations with each other. The residual correlation will change based upon what data is included within the model and the model structure, but it is worth considering which chemical groups (or subgroups) would benefit from being modelled jointly. 
+The ability of a JSDM approach to improve the predictions of species depends upon the common species being a good predictor for the rarer species ([Erickson & Smith, 2023](https://doi.org/10.1111/ecog.06500)). Within our two case studies we found very different levels of residual correlation between chemicals, with PFAS chemicals showing weak to moderate correlation with each other while PAH chemicals show strong to very strong correlations with each other. The residual correlation will change based upon what data is included within the model and the model structure, but it is worth considering which chemical groups (or subgroups) would benefit from being modelled jointly. 
 
 One concern about the models presented here is the tight prior upon the global sigma parameter (i.e. the standard deviation of the lognormal distribution) that was required to fit the models. The high degree of flexibility within the lognormal distribution means that there are multiple ways to fit the model, and the analyst needs to supply a high degree of control to achieve convergence. There may be other model parameterisations that fit this better, which could be explored in future, and, alternatively, other families such as the gamma family could be explored to see if they improve the model fitting procedure.
 
