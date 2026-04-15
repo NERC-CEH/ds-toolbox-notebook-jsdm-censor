@@ -109,9 +109,9 @@ Within `jsdmstan`, it is now possible to fit spline effects at the site/measurem
 
 To fit this model as part of `jsdmstan` we utilize the connections between smoothers and Bayesian methods (see [Miller (2025)](https://doi.org/10.1111/2041-210X.14498) and references therein). We can write our flexible functions as a sum of basis functions:
 
-\begin{equation*}
+$$
 s(x) = \sum_{k=1}^K \beta_k b_k(x)
-\end{equation*}
+$$
 
 where $b_k(x)$ are $K$ simple basis functions which are added-up to create the model complicated $s(x)$ term. Each basis function is scaled by a parameter ($\beta_k$) to be estimated during fitting. To avoid overfitting (since these models can be very flexible. We impose a prior on the $\beta_k$s which controls their values (and correlations) via a multivariate normal distribution. Since we have the prior control for overfitting, we can specify the number of basis functions to use ($K$) to be relatively large and the prior will ensure the result is not too wiggly.
 
